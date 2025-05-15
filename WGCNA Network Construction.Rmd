@@ -1,0 +1,516 @@
+---
+title: "BERD tutorial analysis - WGCNA"
+author: "Ellen C. Francis"
+date: "May 14 2025"
+funding: "ECF NICHD R00108272"
+output: 
+  html_document:
+    code_folding: hide
+editor_options: 
+  markdown: 
+   wrap: 72
+---
+
+```{r setup1, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+```{r setup2, include=FALSE}
+#set to your working directory here if you want
+knitr::opts_knit$set(root.dir = "C:/Users/ef447/OneDrive - Rutgers University/DOCUMENTS/TALKS/BERD/Tutorial")
+```
+
+*Funding: NICHD R00108272*
+
+\# \# Code chunk 1 \#
+
+```{r, Display the current working directory}
+setwd("C:/Users/ef447/OneDrive - Rutgers University/DOCUMENTS/TALKS/BERD/Tutorial")
+getwd();
+# If necessary, change the path below to the directory where the data files are stored. 
+# "." means current directory. On Windows use a forward slash / instead of the usual \.
+workingDir = ".";
+setwd(workingDir); 
+# Load the WGCNA package
+library(WGCNA)
+
+# Load data wrangling package
+library(tidyverse)
+library(tibble)
+
+#load packages for association testing
+library(CorLevelPlot)
+#devtools::install_github("kevinblighe/CorLevelPlot")
+library(rstatix)
+library(reshape2)
+#install.packages("ggstatsplot")
+library(ggstatsplot)
+
+# The following setting is important, do not omit.
+options(stringsAsFactors = FALSE);
+# Allow multi-threading within WGCNA. At present this call is necessary.
+# Any error here may be ignored but you may want to update WGCNA if you see one.
+# Caution: skip this line if you run RStudio or other third-party R environments.
+# See note above.
+enableWGCNAThreads()
+########load metabolomics data########
+# (technical filtering has been applied to this data)
+bd1_resultsd4 <- read.csv("bd1_resultsd4.csv")
+bd1_resultsd4 %>% select(-X) -> bd1_resultsd4 #remove random x variable
+as_tibble(bd1_resultsd4)
+```
+
+#pivot and transform data so that it conforms to WGCNA rules #FEATURES
+IN ROWS and SAMPLES (people) IN COLUMNS
+
+```{r, transform data and inspect}
+datExpr <- bd1_resultsd4 %>% pivot_longer(!RT_mass, names_to="sample_name") %>%
+  pivot_wider(names_from="RT_mass", values_from="value") %>% 
+  column_to_rownames(var = "sample_name") # this is the full metabolomics dataset with all the samples 
+as_tibble(datExpr)
+
+#names(df1) # to get the column names
+dim(datExpr) #to get the dimensions
+```
+
+**QC.**
+
+**Identify potential outliers.**
+
+**Table of WGNCA function to detect outlier "genes"/metabolites and
+outlier samples.**
+
+All metabolites and samples ok so we move to normalization
+
+We conduct QC to identify outliers. We exclude three samples because
+they look like outliers
+
+```{r qc - find outliers}
+gsg <- goodSamplesGenes(datExpr)
+summary(gsg)
+gsg$allOK
+#look to see how many are outliers. All metabolites and samples ok.
+table(gsg$goodGenes)
+table(gsg$goodSamples)
+
+#detect outliers using hierarchical clustering 
+
+htree <- hclust(dist(datExpr), method ="average")
+plot(htree) # potentially some outliers 
+
+
+# detect outliers using pca
+pca <- prcomp(datExpr)
+pca.dat <- pca$x
+pca.var <- pca$sdev^2
+pca.var.percent <- round(pca.var/sum(pca.var*100), digits =2)
+
+pca.dat <- as.data.frame(pca.dat)
+
+ggplot(pca.dat, aes(PC1, PC2)) +
+  geom_point() +
+  geom_text(label = rownames(pca.dat)) +
+  labs(x = paste0('PC1: ', pca.var.percent[1], ' %'),
+       y = paste0('PC2: ', pca.var.percent[2], ' %'))
+
+samples.excluded <- c("PZDa_S_603", "PZDa_S_1390", "PZDa_S_2118")  #Possibly exclude
+
+```
+
+We could exclude three samples because they look like outliers
+"PZDa_S_603", "PZDa_S_1390", "PZDa_S_2118". Exclusion of these does not
+change the results
+
+\# \# Code chunk 2 \#
+
+```{r call_hclust, fig.width=9, fig.height=5,  echo=TRUE}
+powers = c(c(1:10), seq(from = 12, to=20, by=2))
+# Call the network topology analysis function
+sft = pickSoftThreshold(datExpr, powerVector = powers, verbose = 5)
+# Plot the results:
+par(mfrow = c(1,2));
+cex1 = 0.9;
+# Scale-free topology fit index as a function of the soft-thresholding power
+plot(sft$fitIndices[,1], -sign(sft$fitIndices[,3])*sft$fitIndices[,2],
+     xlab="Soft Threshold (power)",ylab="Scale Free Topology Model Fit,signed R^2",type="n",
+     main = paste("Scale independence"));
+text(sft$fitIndices[,1], -sign(sft$fitIndices[,3])*sft$fitIndices[,2],
+     labels=powers,cex=cex1,col="red");
+# this line corresponds to using an R^2 cut-off of h
+abline(h=0.90,col="red")
+# Mean connectivity as a function of the soft-thresholding power
+plot(sft$fitIndices[,1], sft$fitIndices[,5],
+     xlab="Soft Threshold (power)",ylab="Mean Connectivity", type="n",
+     main = paste("Mean connectivity"))
+text(sft$fitIndices[,1], sft$fitIndices[,5], labels=powers, cex=cex1,col="red")
+```
+
+\# \# Code chunk 3 \#
+
+```{r, soft power}
+softPower = 6;
+adjacency = adjacency(datExpr, power = softPower);
+```
+
+\# \# Code chunk 4 \#
+
+```{r, Turn adjacency into topological overlap}
+TOM = TOMsimilarity(adjacency);
+dissTOM = 1-TOM
+```
+
+\# \# Code chunk 5 \#
+
+```{r Call the hierarch func, fig.width=12, fig.height=9, echo=TRUE}
+geneTree = hclust(as.dist(dissTOM), method = "average");
+# Plot the resulting clustering tree (dendrogram)
+plot(geneTree, xlab="", sub="", main = "Metabolite clustering on TOM-based dissimilarity",
+     labels = FALSE, hang = 0.04);
+
+```
+
+\# \# Code chunk 6 \#
+
+```{r, specify module size}
+#We like large modules, so we set the minimum module size relatively high:
+minModuleSize = 30;
+# Module identification using dynamic tree cut:
+dynamicMods = cutreeDynamic(dendro = geneTree, distM = dissTOM,
+                deepSplit = 2, pamRespectsDendro = FALSE,
+                minClusterSize = minModuleSize);
+table(dynamicMods)
+```
+
+\# \# Code chunk 7 \#
+
+```{r, Convert numeric lables into colors, fig.width=8, fig.height=6, echo=TRUE}
+dynamicColors = labels2colors(dynamicMods)
+table(dynamicColors)
+# Plot the dendrogram and colors underneath
+plotDendroAndColors(geneTree, dynamicColors, "Dynamic Tree Cut",
+                    dendroLabels = FALSE, hang = 0.03,
+                    addGuide = TRUE, guideHang = 0.05,
+                    main = "Metabolite dendrogram and module colors")
+```
+
+\# \# Code chunk 8 \#
+
+```{r, Calculate eigengenes and change cut threshold, fig.width=7, fig.height=6, echo=TRUE}
+MEList = moduleEigengenes(datExpr, colors = dynamicColors)
+MEs = MEList$eigengenes
+# Calculate dissimilarity of module eigengenes
+MEDiss = 1-cor(MEs);
+# Cluster module eigengenes
+METree = hclust(as.dist(MEDiss), method = "average");
+# Plot the result
+plot(METree, main = "Clustering of module eigenmetabolites",
+     xlab = "", sub = "")
+
+## change this number to change the cutting threshold
+MEDissThres = 0.4
+MEDissThresHigh = 0.6
+
+# Plot the dendrogram
+plot(METree, main = "Clustering of Module Eigengenes",
+     xlab = "", sub = "")
+
+# Add the first cut line (low threshold)
+abline(h = MEDissThres, col = "red", lty = 2, lwd = 2)  # Dashed red line
+
+# Add the second cut line (high threshold)
+abline(h = MEDissThresHigh, col = "blue", lty = 1, lwd = 2)  # Solid blue line
+
+# Add a legend for clarity
+legend("topright", legend = c("Low Threshold (9 MEs)", "High Threshold (6 MEs)"),
+       col = c("red", "blue"), lty = c(2, 1), lwd = 2)
+
+
+```
+
+-   This height threshold merges modules that are clustered together
+    with a distance below this line.
+
+    \# \# Code chunk 9 \#
+
+```{r, merge modules}
+# Call an automatic merging function
+merge = mergeCloseModules(datExpr, dynamicColors, cutHeight = MEDissThres, verbose = 3)
+# The merged module colors
+mergedColors = merge$colors;
+# Eigengenes of the new merged modules:
+mergedMEs = merge$newMEs;
+```
+
+\# \# Code chunk 10 \#
+
+```{r, dendogram plots, fig.width=12, fig.height=9, echo=TRUE}
+#pdf(file = "Plots/geneDendro-3.pdf", wi = 9, he = 6)
+plotDendroAndColors(geneTree, cbind(dynamicColors, mergedColors),
+                    c("Dynamic Tree Cut", "Merged dynamic"),
+                    dendroLabels = FALSE, hang = 0.03,
+                    addGuide = TRUE, guideHang = 0.05)
+table(mergedColors)
+table(dynamicColors)
+
+#dev.off()
+```
+
+\# \# Code chunk 11 \#
+
+```{r, names modules colors}
+# Rename to moduleColors
+moduleColors = mergedColors
+# Construct numerical labels corresponding to the colors
+colorOrder = c("grey", standardColors(50));
+moduleLabels = match(moduleColors, colorOrder)-1;
+MEs = mergedMEs;
+# Save module colors and labels for use in subsequent parts
+save(MEs, moduleLabels, moduleColors, geneTree, file = "Tutorial_Network.RData")
+
+glimpse(MEs)
+```
+
+Determine which metabolites are hubs by determine which metabolites have
+extremely high kME values. ***HUB METABOLIES***
+
+\# \# Code chunk 12 \#
+
+```{r determine hubs eigen modules}
+dim(datExpr)  # Should be (samples x metabolites)
+dim(MEs)      # Should be (samples x modules)
+glimpse(rownames(datExpr))
+glimpse(rownames(MEs))
+# Check if the rownames match
+all(rownames(MEs) == rownames(datExpr))
+
+# Calculate module membership (kME) for each metabolite
+geneModuleMembership = signedKME(datExpr, MEs)
+
+# Use the module names from MEs for consistent labeling
+colnames(geneModuleMembership) = paste0("k_", names(MEs))
+
+# Calculate p-values for each kME
+MMPvalue = corPvalueStudent(as.matrix(geneModuleMembership), nrow(datExpr))
+colnames(MMPvalue) = paste0("pval_", names(MEs))
+
+# Extract gene (metabolite) names (use column names of datExpr)
+Gene = colnames(datExpr)
+
+# Create the full kME table
+kMEtable = data.frame(Metabolite = Gene, 
+                      Module = moduleColors,  # Correct module assignments
+                      geneModuleMembership, 
+                      MMPvalue)
+
+# Save the full kME and p-value table to CSV
+write.csv(kMEtable, "kMEtable.csv", row.names = FALSE)
+
+# Preview the first few rows to confirm - this is a matrux of metabolites and their modules
+glimpse(kMEtable)
+```
+
+\# \# Code chunk 13 \#
+
+\`
+
+```{r determine hubs in networks}
+# Initialize list to store top hub genes per module
+topGenesKME = list()
+
+# Extract module names from the kME matrix
+module_names = colnames(geneModuleMembership)
+
+# Loop through each module to identify top hub genes
+for (module in module_names) {
+  
+  # Rank genes within the module (higher kME is better for hubs)
+  kMErank = rank(-geneModuleMembership[, module])
+  
+  # Extract the top 10 hub genes
+  topGenes = Gene[kMErank <= 10]
+  
+  # Store in the list
+  module_name_cleaned = sub("kME_", "", module)
+  topGenesKME[[module_name_cleaned]] = topGenes
+}
+
+# Convert the list to a data frame for easier viewing
+topGenesKME_df = as.data.frame(topGenesKME)
+
+# Save the top hub genes to a CSV file
+write.csv(topGenesKME_df, "TopGenesKME.csv", row.names = FALSE)
+
+# Preview the top hub genes
+print(topGenesKME_df)
+
+```
+
+\# \# Code chunk 14 \#
+
+```{r, peak intensity module}
+# Loop through each module
+for (module in unique(mergedColors)) {
+  
+  # Extract the ME for the current module
+  ME_values = MEs[, paste0("ME", module)]
+  
+  # Order the samples by ME values
+  ordered_indices = order(ME_values)
+  ordered_ME_values = ME_values[ordered_indices]
+  
+  # Create the bar plot
+  bp = barplot(ordered_ME_values, 
+               col = module, 
+               main = paste("Module:", module), 
+               cex.main = 0.8, 
+               ylab = "Eigengene Expression", 
+               xlab = "Sample", 
+               border = NA, 
+               las = 2)
+  
+  # Calculate the 25th, 50th, and 75th percentiles
+  n_samples = length(ordered_ME_values)
+  quantiles = quantile(1:n_samples, probs = c(0.25, 0.5, 0.75))
+  
+  # Add vertical lines at the quantiles
+  abline(v = bp[quantiles], col = "black", lty = 2, lwd = 2)
+  
+  # Add percentile labels
+  text(x = bp[quantiles], y = max(ordered_ME_values) * 0.95, 
+       labels = c("25%", "50%", "75%"), 
+       pos = 3, cex = 0.7, col = "black")
+}
+```
+
+-   Code chunk 15
+
+-   correlations with clinical data. This will not work because of data
+    access issues
+
+```{r correlation with traits.outcomes, echo=FALSE, results='hide'}
+# read in imputed outcomes and traits data to use for clinical insight
+read.csv("trts.outcms.impscl.csv") -> trts.outcms.impscl
+#row indictor is removed
+trts.outcms.impscl %>% select(-X) -> trts.outcms.impscl
+
+#remove imputed prefix indicators for simplicity
+colnames(trts.outcms.impscl)<-gsub("imputed_cart.","",colnames(trts.outcms.impscl))
+colnames(trts.outcms.impscl)<-gsub("imputed_pmm.","",colnames(trts.outcms.impscl))
+
+#read in sample manifest
+sbd1_factorsd2 <- read.csv("sbd1_factorsd2.csv")
+
+#1065 samples to be selected from the ipv1 samples -> this works bc the covariates don't vary over pregnancy 
+#so we can link based on PID and not sample
+trts.outcms.impscl %>% filter(pid %in% sbd1_factorsd2$PID) -> trts.outcms.impscl
+
+trts.outcms.impscl.1 <- sbd1_factorsd2 %>% select(sample_name, PID) %>% 
+  mutate(pid=PID) %>% 
+  right_join(trts.outcms.impscl, by="pid") 
+
+trts.outcms.impscl.1 <- trts.outcms.impscl.1 %>% select(-PID, -pid)
+
+arrange(trts.outcms.impscl.1, desc(sample_name))
+```
+
+\*sample of the clinical characteristics available.
+
+**Heat map of the correlation between metabolites and covariates**
+
+We check these associations to assess whether we should be dropping any
+modules or focusing in on certain modules.
+
+```{r add modules to clinical data}
+#check if row names and IDs are the same
+identical(rownames(MEs), trts.outcms.impscl.1$sample_name)
+#more data chekcs
+nSamples <- nrow(datExpr)
+nMets <- ncol(datExpr)
+
+#move sample names to row names and drop
+trts.outcms.impscl.1 <- column_to_rownames(trts.outcms.impscl.1, var="sample_name")
+
+#pearson correlation
+module.covars.corr <- cor(MEs, trts.outcms.impscl.1, use = "p")
+module.covars.corr.pvals <- corPvalueStudent(module.covars.corr, nSamples)
+glimpse(module.covars.corr.pvals)
+```
+
+```{r heatmap covars and metabolites,  out.width = "80%", fig.width=15, fig.height=8}
+library(CorLevelPlot)
+covars.heatmap.data <- merge(MEs, trts.outcms.impscl.1, by = "row.names")
+glimpse(covars.heatmap.data) # i use this to see what I want on the X axis and Y axis. We have 9 MEs so i'll but them on X
+dim(covars.heatmap.data)
+#move ids back to row name
+covars.heatmap.data <-covars.heatmap.data %>%
+  column_to_rownames(var = "Row.names")
+
+CorLevelPlot(covars.heatmap.data, 
+             x =names(covars.heatmap.data)[1:9],
+             y= names(covars.heatmap.data)[c(10:17,20)], #if you just want to select certain variables
+             col = c("blue1", "skyblue", "white", "pink", "Red"),
+            cexLabX = .75,
+            rotLabX = 45,
+            colLabX = "grey20",
+            fontLabX = 1,
+            cexLabY = .75,
+            fontLabY = 1,
+        cexCorval = .75,
+        fontCorval = .5,
+        cexLabColKey = .75)
+```
+
+\`\`
+
+```{r compare expression levels by group}
+
+# Extract only the relevant ME columns and the grouping variable
+ME_colors <- c("MEpink", "MEblack", "MEbrown", "MEgreen", "MEyellow", "MEpurple")
+ME.exprs <- select(covars.heatmap.data, all_of(ME_colors), rcluster_5)
+
+# Define color palettes for each module
+color_palettes <- c(
+  "MEpink" = "PiYG",
+  "MEblack" = "Greys",
+  "MEred" = "RdGy",
+  "MEgreen" = "Greens",
+  "MEyellow" = "YlOrBr",
+  "MEbrown" = "PuOr",
+  "MEblue" = "Blues",
+  "MEturquoise" = "YlGnBu",
+  "MEpurple" = "Purples"
+)
+
+# Generate plots using a loop
+plot_list <- list()
+
+for (ME in ME_colors) {
+  
+  plt <- ggbetweenstats(
+    data = ME.exprs,
+    x = rcluster_5,
+    y = !!sym(ME),
+    type = "nonparametric",
+    plot.type = "box",
+    pairwise.comparisons = TRUE,
+    pairwise.display = "s",
+    p.adjust.method = "fdr",
+    var.equal = FALSE,
+    centrality.plotting = FALSE,
+    bf.message = FALSE,
+    package = "RColorBrewer",
+    palette = color_palettes[ME]
+  )
+  
+  # Store the plot in the list
+  plot_list[[ME]] <- plt
+  
+  # Print each plot (optional)
+  print(plt)
+}
+
+# Access individual plots if needed
+plot_list$MEyellow
+```
+
+
