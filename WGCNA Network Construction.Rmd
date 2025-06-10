@@ -1,14 +1,15 @@
 ---
 title: "BERD tutorial analysis - WGCNA"
 author: "Ellen C. Francis"
-date: "May 14 2025"
-funding: "ECF NICHD R00108272"
-output: 
+date: "Updated June 10 2025"
+output:
   html_document:
     code_folding: hide
-editor_options: 
-  markdown: 
-   wrap: 72
+  pdf_document: default
+funding: ECF NICHD R00108272
+editor_options:
+  markdown:
+    wrap: 72
 ---
 
 ```{r setup1, include=FALSE}
@@ -60,8 +61,8 @@ bd1_resultsd4 %>% select(-X) -> bd1_resultsd4 #remove random x variable
 as_tibble(bd1_resultsd4)
 ```
 
-#pivot and transform data so that it conforms to WGCNA rules #FEATURES
-IN ROWS and SAMPLES (people) IN COLUMNS
+#pivot and transform data so that it conforms to WGCNA rules
+#Samples in Rows and Metabolites in Columns
 
 ```{r, transform data and inspect}
 datExpr <- bd1_resultsd4 %>% pivot_longer(!RT_mass, names_to="sample_name") %>%
@@ -144,6 +145,17 @@ plot(sft$fitIndices[,1], sft$fitIndices[,5],
      main = paste("Mean connectivity"))
 text(sft$fitIndices[,1], sft$fitIndices[,5], labels=powers, cex=cex1,col="red")
 ```
+If R² is consistently below 0.8: Your network may not be scale-free, suggesting you might need to try a different power range or consider whether WGCNA is appropriate for this dataset.
+
+Low Mean Connectivity: If mean connectivity is very low, your modules might be poorly defined, indicating a need for a lower power.
+
+*CONNECTIVITY
+- High Mean Connectivity: Suggests that many nodes are interconnected, forming dense modules that are likely to reflect real biological networks.
+- Low Mean Connectivity: Indicates that most nodes are weakly connected, potentially forming sparse or poorly defined modules, which can make it difficult to identify biologically meaningful clusters.
+
+*POWER
+- Higher Power: Makes the adjacency matrix more binary (sharper separation of strong vs. weak connections), reducing overall connectivity.
+- Lower Power: Produces a more interconnected network, increasing overall connectivity.
 
 \# \# Code chunk 3 \#
 
@@ -220,7 +232,6 @@ abline(h = MEDissThres, col = "red", lty = 2, lwd = 2)  # Dashed red line
 # Add the second cut line (high threshold)
 abline(h = MEDissThresHigh, col = "blue", lty = 1, lwd = 2)  # Solid blue line
 
-# Add a legend for clarity
 legend("topright", legend = c("Low Threshold (9 MEs)", "High Threshold (6 MEs)"),
        col = c("red", "blue"), lty = c(2, 1), lwd = 2)
 
